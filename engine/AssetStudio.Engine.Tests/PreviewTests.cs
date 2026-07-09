@@ -6,11 +6,12 @@ namespace AssetStudio.Engine.Tests;
 
 public class PreviewTests
 {
-    private static StdioClient LoadFixture(string name)
+    private static StdioClient LoadFixture(string name, bool loadAll = false)
     {
         var c = new StdioClient();
         c.Request("initialize", null);
-        c.Request("workspace/load", new { paths = new[] { Path.Combine(StdioClient.FixturesDir, name) } });
+        c.Request("workspace/load",
+            new { paths = new[] { Path.Combine(StdioClient.FixturesDir, name) }, loadAll });
         return c;
     }
 
@@ -70,5 +71,42 @@ public class PreviewTests
         using var c = LoadFixture("char_118_yuki.ab");
         var ex = Assert.Throws<InvalidOperationException>(() => c.Request("assets/preview", new { id = 99999 }));
         Assert.Contains("BAD_ID", ex.Message);
+    }
+
+    [Fact]
+    public void PreviewCacheHitDoesNotRecompute()
+    {
+        using var c = LoadFixture("xinzexi_2_n_tex");
+        var id = Rows(c).First(r => r["type"]!.Value<string>() == "Texture2D")["id"]!.Value<int>();
+        var path = c.Request("assets/preview", new { id })["path"]!.Value<string>()!;
+        Assert.True(File.Exists(path));
+        File.WriteAllText(path, "SENTINEL"); // clobber the PNG; a recompute would overwrite this
+        var again = c.Request("assets/preview", new { id })["path"]!.Value<string>()!;
+        Assert.Equal(path, again);
+        Assert.Equal("SENTINEL", File.ReadAllText(again)); // cache hit => Build not called => sentinel survives
+    }
+
+    [Fact]
+    public void ResetInvalidatesPreviewCacheAndDeletesTempFiles()
+    {
+        using var c = LoadFixture("xinzexi_2_n_tex");
+        var id = Rows(c).First(r => r["type"]!.Value<string>() == "Texture2D")["id"]!.Value<int>();
+        var path = c.Request("assets/preview", new { id })["path"]!.Value<string>()!;
+        Assert.True(File.Exists(path));
+        c.Request("workspace/reset", null);
+        Assert.False(File.Exists(path)); // InvalidateAll cleared the temp dir
+    }
+
+    [Fact]
+    public void LoadAllExposesTextDumpForNonMediaAsset()
+    {
+        using var c = LoadFixture("atlas_test", loadAll: true);
+        var atlas = Rows(c).FirstOrDefault(r => r["type"]!.Value<string>() == "SpriteAtlas");
+        Assert.NotNull(atlas); // loadAll surfaces the SpriteAtlas -> default case -> DumpAsset
+        var p = c.Request("assets/preview", new { id = atlas!["id"]!.Value<int>() });
+        Assert.Equal("text", p["kind"]!.Value<string>());
+        var text = p["text"]!.Value<string>();
+        var path = p["path"]!.Value<string>();
+        Assert.True(!string.IsNullOrEmpty(text) || !string.IsNullOrEmpty(path));
     }
 }

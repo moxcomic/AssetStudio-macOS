@@ -26,6 +26,11 @@ public class Workspace
     // progress during the expensive LoadFilesAndFolders read, not just a fast 0->100 burst after.
     public event Action<string, int, int>? Progress;
 
+    // Fires whenever the workspace is cleared (both workspace/reset and the Reset() at the start of
+    // every Load). EngineServer hooks this to invalidate the preview cache + temp files — which also
+    // covers a load that fails AFTER Reset() has already emptied Assets (M1).
+    public event Action? OnReset;
+
     public LoadResult Load(string[] paths, string? unityVersion, bool loadAll)
     {
         var missing = paths.Where(p => !File.Exists(p) && !Directory.Exists(p)).ToList();
@@ -57,6 +62,7 @@ public class Workspace
         Manager.Clear();
         Assets.Clear();
         _rowCache = null;
+        OnReset?.Invoke();
     }
 
     public ListResult List(int offset, int limit)

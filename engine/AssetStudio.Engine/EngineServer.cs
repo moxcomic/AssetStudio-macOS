@@ -26,6 +26,9 @@ public class EngineServer
         _workspace.Progress += (token, current, total) => Notify("progress", new ProgressNote(token, current, total, null));
         Logger.Default = new RpcLogger(note => Notify("log", note));
         _previews = new PreviewService(_tmp, _assemblyLoader);
+        // Invalidate the preview cache + temp files whenever the workspace is cleared (load-time Reset,
+        // workspace/reset, and post-Reset load failures). Fires inside the gate, so it is single-threaded.
+        _workspace.OnReset += () => _previews?.InvalidateAll();
     }
 
     private void Notify(string method, object arg)
@@ -76,12 +79,9 @@ public class EngineServer
     public async Task<LoadResult> LoadAsync(string[] paths, string? unityVersion = null, bool loadAll = false)
     {
         await _gate.WaitAsync();
-        try
-        {
-            var result = await Task.Run(() => _workspace.Load(paths, unityVersion, loadAll));
-            _previews?.InvalidateAll(); // asset ids are reassigned on each load — drop stale cache + temp files
-            return result;
-        }
+        // Preview cache/temp invalidation is handled by Workspace.OnReset (Load calls Reset() up front),
+        // which also fires on a post-Reset load failure — no explicit InvalidateAll needed here.
+        try { return await Task.Run(() => _workspace.Load(paths, unityVersion, loadAll)); }
         catch (EngineException e) { throw Wrap(e); }
         catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.LoadFailed, e.Message)); }
         finally { _gate.Release(); }
@@ -91,7 +91,7 @@ public class EngineServer
     public async Task ResetAsync()
     {
         await _gate.WaitAsync();
-        try { _workspace.Reset(); _previews?.InvalidateAll(); }
+        try { _workspace.Reset(); }
         catch (EngineException e) { throw Wrap(e); }
         catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.IoError, e.Message)); }
         finally { _gate.Release(); }

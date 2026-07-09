@@ -23,14 +23,25 @@ public sealed class SessionTempDir : IDisposable
 
     private static void SweepStale(string baseDir)
     {
-        if (!Directory.Exists(baseDir)) return;
-        foreach (var dir in Directory.EnumerateDirectories(baseDir))
+        try
         {
-            var name = Path.GetFileName(dir);
-            if (!int.TryParse(name, out var pid)) continue;
-            try { System.Diagnostics.Process.GetProcessById(pid); }
-            catch (ArgumentException) { try { Directory.Delete(dir, recursive: true); } catch { } }
+            if (!Directory.Exists(baseDir)) return;
+            foreach (var dir in Directory.EnumerateDirectories(baseDir))
+            {
+                try
+                {
+                    if (!int.TryParse(Path.GetFileName(dir), out var pid)) continue;
+                    bool alive;
+                    // GetProcessById returns a handle that must be disposed when the process exists;
+                    // it throws ArgumentException when no such process is running.
+                    try { using var proc = System.Diagnostics.Process.GetProcessById(pid); alive = true; }
+                    catch (ArgumentException) { alive = false; }
+                    if (!alive) Directory.Delete(dir, recursive: true);
+                }
+                catch { /* one bad dir must not stop sweeping the rest */ }
+            }
         }
+        catch { /* temp housekeeping must never abort engine startup */ }
     }
 
     public void Dispose() { try { Directory.Delete(Root, recursive: true); } catch { } }
