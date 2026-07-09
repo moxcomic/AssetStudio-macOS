@@ -15,7 +15,13 @@ final class EngineController {
     var errorToast: String? = nil
     var capabilities: InitializeResult? = nil
     var unityVersion: String? = nil
-    var onExportProgress: ((ProgressNote) -> Void)? = nil   // Task 10 wires this
+
+    /// Assign with `[weak self]` inside the closure to avoid a retain cycle:
+    /// the controller owns the client whose notifications feed this back. (Task 10)
+    var onExportProgress: ((ProgressNote) -> Void)? = nil
+
+    /// assets/list page size — one place to tune the pagination granularity.
+    private static let pageSize = 5000
 
     // MARK: Memoized data pipeline (didSet → recompute) — preserved from Task 2.
 
@@ -43,8 +49,7 @@ final class EngineController {
     }
 
     /// Assets matching the current type filter and search text, sorted by
-    /// `sortOrder`. Memoized: recomputed only when an input changes (`rows`,
-    /// `searchText`, `selectedType`, `sortOrder`), so reads from `body` are O(1).
+    /// `sortOrder`. Memoized: recomputed only when an input changes.
     private(set) var visibleRows: [AssetRow] = []
 
     /// `(type, count)` pairs over all loaded `rows`, sorted by type. Memoized:
@@ -73,21 +78,42 @@ final class EngineController {
 
     // MARK: Engine lifecycle + data flow.
 
-    private var client: EngineClient? = nil
+    @ObservationIgnored private var client: (any EngineServicing)? = nil
+    @ObservationIgnored private let injectedClient: (any EngineServicing)?
 
-    func engineClient() -> EngineClient? { client }
+    /// Monotonic token: bumped whenever a load or reset starts. Any in-flight
+    /// `openFiles` compares its captured token before each post-`await` mutation
+    /// and bails if a newer load/reset superseded it, so results from a stale
+    /// engine workspace can never overwrite the current one.
+    @ObservationIgnored private var loadGeneration = 0
+
+    init(injectedClient: (any EngineServicing)? = nil) {
+        self.injectedClient = injectedClient
+    }
+
+    func engineClient() -> (any EngineServicing)? { client }
 
     func startEngineIfNeeded() async {
         guard client == nil else { return }
-        guard let url = EngineClient.defaultEngineURL() else {
-            state = .engineMissing("engine URL unavailable"); return
+        let c: any EngineServicing
+        if let injected = injectedClient {
+            c = injected
+        } else {
+            guard let url = EngineClient.defaultEngineURL() else {
+                state = .engineMissing("engine URL unavailable"); return
+            }
+            // EngineClient is single-use: every (re)start constructs a fresh instance.
+            let real = EngineClient()
+            do {
+                try await real.start(engineURL: url)
+            } catch {
+                state = .engineMissing(error.localizedDescription); return
+            }
+            c = real
         }
-        // EngineClient is single-use: every (re)start constructs a fresh instance.
-        let c = EngineClient()
         do {
-            try await c.start(engineURL: url)
+            capabilities = try await c.initialize()   // assign client only once usable
             client = c
-            capabilities = try await c.initialize()
             listenForNotifications(c)
             listenForExit(c)
         } catch {
@@ -95,7 +121,7 @@ final class EngineController {
         }
     }
 
-    private func listenForNotifications(_ c: EngineClient) {
+    private func listenForNotifications(_ c: any EngineServicing) {
         Task { [weak self] in
             for await note in c.notifications {
                 guard let self else { return }
@@ -112,7 +138,7 @@ final class EngineController {
         }
     }
 
-    private func listenForExit(_ c: EngineClient) {
+    private func listenForExit(_ c: any EngineServicing) {
         Task { [weak self] in
             for await code in c.processExited {
                 guard let self else { return }
@@ -126,26 +152,33 @@ final class EngineController {
     func openFiles(_ urls: [URL]) async {
         await startEngineIfNeeded()
         guard let c = client else { return }
+        loadGeneration += 1
+        let gen = loadGeneration
         state = .loading(current: 0, total: 0)
-        selection = nil
-        rows = []
         do {
-            let load = try await c.load(paths: urls.map(\.path))
-            unityVersion = load.unityVersion
+            let load = try await c.load(paths: urls.map(\.path), unityVersion: nil, loadAll: false)
+            guard gen == loadGeneration else { return }
             var all: [AssetRow] = []
             var offset = 0
             while true {
-                let page = try await c.list(offset: offset, limit: 5000)
+                let page = try await c.list(offset: offset, limit: Self.pageSize)
+                guard gen == loadGeneration else { return }   // a newer load/reset superseded us
                 all.append(contentsOf: page.rows)
                 offset += page.rows.count
                 if offset >= page.total || page.rows.isEmpty { break }
             }
+            guard gen == loadGeneration else { return }
+            // Clear/replace only on success, so a failed reload preserves the
+            // previously loaded workspace instead of wiping it.
+            selection = nil
             rows = all
+            unityVersion = load.unityVersion
             state = .ready
             if load.loadedFiles == 0 {
                 errorToast = "No loadable Unity files found in the selection."
             }
         } catch {
+            guard gen == loadGeneration else { return }
             state = rows.isEmpty ? .idle : .ready
             errorToast = error.localizedDescription
         }
@@ -164,7 +197,19 @@ final class EngineController {
     }
 
     func resetWorkspace() async {
-        rows = []; selection = nil; unityVersion = nil; state = .idle
+        // Bump the token first so any in-flight openFiles bails instead of
+        // resuming and silently undoing this reset.
+        loadGeneration += 1
+        rows = []
+        selection = nil
+        unityVersion = nil
+        state = .idle
         if let c = client { try? await c.reset() }
+    }
+
+    /// Terminate the engine child cleanly. Called at app quit (see AppDelegate).
+    func shutdownEngine() async {
+        await client?.shutdown()
+        client = nil
     }
 }

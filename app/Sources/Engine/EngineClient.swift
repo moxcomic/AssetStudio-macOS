@@ -10,7 +10,7 @@ import Foundation
 /// running client without `shutdown()` leaks the child process and its reader
 /// sources. (Best-effort teardown, a SIGKILL fallback, and per-request timeouts
 /// are Task 7's lifecycle work.)
-actor EngineClient {
+actor EngineClient: EngineServicing {
     enum State { case notStarted, running, exited(Int32) }
 
     private let process = Process()
