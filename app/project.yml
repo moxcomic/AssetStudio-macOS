@@ -24,13 +24,14 @@ targets:
     postBuildScripts:
       - name: Embed AssetStudio Engine
         script: |
+          set -eu
           ENGINE_SRC="$SRCROOT/../engine/publish"
           DEST="$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/engine"
           if [ -d "$ENGINE_SRC" ]; then
             rm -rf "$DEST"; mkdir -p "$DEST"
             cp -R "$ENGINE_SRC/" "$DEST/"
           else
-            echo "warning: $ENGINE_SRC missing — run scripts/build-engine.sh (app will show Engine Not Found)"
+            echo "error: $ENGINE_SRC missing — run scripts/build-engine.sh" >&2; exit 1
           fi
         basedOnDependencyAnalysis: false
   AssetStudioTests:
