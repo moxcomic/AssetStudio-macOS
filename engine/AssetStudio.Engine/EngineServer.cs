@@ -17,6 +17,7 @@ public class EngineServer
     private readonly AssemblyLoader _assemblyLoader = new();
     private PreviewService? _previews;
     private ExportService? _exports;
+    private InitializeResult? _caps;
     private JsonRpc? _rpc;
 
     public Workspace Workspace => _workspace;
@@ -51,11 +52,14 @@ public class EngineServer
     [JsonRpcMethod("initialize")]
     public InitializeResult Initialize()
     {
-        // Stateless w.r.t. the workspace, so intentionally ungated.
+        // Stateless w.r.t. the workspace, so intentionally ungated. Cached: the native probe TryLoad/Frees
+        // three dylibs and the versions/capabilities never change within a process, so compute once. A
+        // concurrent first-call race just recomputes an identical value, so no lock is needed.
+        if (_caps != null) return _caps;
         // Engine version from the assembly (authoritative <Version>), formatted to 3 parts => "0.1.0".
         var engine = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
         var core = typeof(AssetsManager).Assembly.GetName().Version?.ToString() ?? "unknown";
-        return new InitializeResult(engine, core, new NativeCaps(
+        return _caps = new InitializeResult(engine, core, new NativeCaps(
             Probe("Texture2DDecoderNative"), Probe("AssetStudioFBXNative"), Probe("fmod")));
     }
 

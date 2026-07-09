@@ -28,6 +28,7 @@ public class ExportService
 
         int exported = 0, skipped = 0;
         var errors = new List<ExportErrorDto>();
+        // TODO: optional bulk-export cap — v1 relies on the UI's progress HUD + cancel; no hard cap in scope.
         for (var n = 0; n < ids.Length; n++)
         {
             ct.ThrowIfCancellationRequested();
