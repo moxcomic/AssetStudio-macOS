@@ -28,18 +28,40 @@ final class FrameParserTests: XCTestCase {
         var p = FrameParser()
         let out = p.feed(frame(#"{"n":1}"#) + frame(#"{"n":2}"#))
         XCTAssertEqual(out.count, 2)
+        XCTAssertEqual(String(decoding: out[0], as: UTF8.self), #"{"n":1}"#)
+        XCTAssertEqual(String(decoding: out[1], as: UTF8.self), #"{"n":2}"#)
     }
 
     func testCaseInsensitiveHeaderAndExtraHeaders() {
         var p = FrameParser()
         let body = Data(#"{"x":true}"#.utf8)
         let raw = Data("content-length: \(body.count)\r\nContent-Type: application/json\r\n\r\n".utf8) + body
-        XCTAssertEqual(p.feed(raw).count, 1)
+        let out = p.feed(raw)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(String(decoding: out[0], as: UTF8.self), #"{"x":true}"#)
     }
 
     func testUTF8BodyLengthInBytes() {
         var p = FrameParser()
-        let out = p.feed(frame(#"{"name":"雪"}"#))
+        let json = #"{"name":"雪"}"#   // "雪" is 3 UTF-8 bytes: length must be byte-counted
+        let out = p.feed(frame(json))
         XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(String(decoding: out[0], as: UTF8.self), json)
+    }
+
+    func testZeroLengthBody() {
+        var p = FrameParser()
+        let out = p.feed(Data("Content-Length: 0\r\n\r\n".utf8))
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].count, 0)
+    }
+
+    func testMalformedHeaderThenValidRecovers() {
+        var p = FrameParser()
+        // A header block with no Content-Length is skipped; the next valid frame parses.
+        let malformed = Data("X-Bad: nope\r\n\r\n".utf8)
+        let out = p.feed(malformed + frame(#"{"ok":true}"#))
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(String(decoding: out[0], as: UTF8.self), #"{"ok":true}"#)
     }
 }

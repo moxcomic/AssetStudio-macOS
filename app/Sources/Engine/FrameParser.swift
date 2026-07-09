@@ -4,6 +4,12 @@ import Foundation
 struct FrameParser {
     private var buffer = Data()
     private static let separator = Data("\r\n\r\n".utf8)
+    /// Defensive ceiling on a single frame's declared body size. The trusted
+    /// local engine never sends frames near this; a corrupt or lying
+    /// Content-Length would otherwise stall the frame forever and grow `buffer`
+    /// unboundedly. (The header is re-scanned per feed while a frame accumulates,
+    /// which is O(n²) for a large payload — bounding the size also bounds that.)
+    private static let maxFrameBytes = 512 * 1024 * 1024
 
     mutating func feed(_ chunk: Data) -> [Data] {
         buffer.append(chunk)
@@ -23,6 +29,13 @@ struct FrameParser {
             guard let length = contentLength else {
                 buffer.removeFirst(headerLen + Self.separator.count)   // malformed header: skip it
                 continue
+            }
+            guard length >= 0, length <= Self.maxFrameBytes else {
+                // Negative or oversized length: framing sync is lost. Drop the
+                // buffer and resync on the next feed rather than block, grow
+                // unboundedly, or trap on a negative prefix length.
+                buffer.removeAll(keepingCapacity: false)
+                break
             }
             let total = headerLen + Self.separator.count + length
             guard buffer.count >= total else { break }
