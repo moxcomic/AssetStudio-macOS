@@ -7,3 +7,7 @@ app/build/
 dist/
 DerivedData/
 *.xcuserdatad/
+
+# Kept local, excluded from the repo (per request)
+docs/
+.claude/
