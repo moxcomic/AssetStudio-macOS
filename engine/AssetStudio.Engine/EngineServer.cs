@@ -13,6 +13,9 @@ public class EngineServer
     // acquires this gate, so the non-thread-safe Workspace is never touched concurrently even
     // though StreamJsonRpc dispatches requests concurrently and Load runs on a Task.Run thread.
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SessionTempDir _tmp = new();
+    private readonly AssemblyLoader _assemblyLoader = new();
+    private PreviewService? _previews;
     private JsonRpc? _rpc;
 
     public Workspace Workspace => _workspace;
@@ -22,6 +25,7 @@ public class EngineServer
         _rpc = rpc;
         _workspace.Progress += (token, current, total) => Notify("progress", new ProgressNote(token, current, total, null));
         Logger.Default = new RpcLogger(note => Notify("log", note));
+        _previews = new PreviewService(_tmp, _assemblyLoader);
     }
 
     private void Notify(string method, object arg)
@@ -72,7 +76,12 @@ public class EngineServer
     public async Task<LoadResult> LoadAsync(string[] paths, string? unityVersion = null, bool loadAll = false)
     {
         await _gate.WaitAsync();
-        try { return await Task.Run(() => _workspace.Load(paths, unityVersion, loadAll)); }
+        try
+        {
+            var result = await Task.Run(() => _workspace.Load(paths, unityVersion, loadAll));
+            _previews?.InvalidateAll(); // asset ids are reassigned on each load — drop stale cache + temp files
+            return result;
+        }
         catch (EngineException e) { throw Wrap(e); }
         catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.LoadFailed, e.Message)); }
         finally { _gate.Release(); }
@@ -82,7 +91,7 @@ public class EngineServer
     public async Task ResetAsync()
     {
         await _gate.WaitAsync();
-        try { _workspace.Reset(); }
+        try { _workspace.Reset(); _previews?.InvalidateAll(); }
         catch (EngineException e) { throw Wrap(e); }
         catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.IoError, e.Message)); }
         finally { _gate.Release(); }
@@ -95,6 +104,20 @@ public class EngineServer
         try { return _workspace.List(offset, limit); }
         catch (EngineException e) { throw Wrap(e); }
         catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.IoError, e.Message)); }
+        finally { _gate.Release(); }
+    }
+
+    [JsonRpcMethod("assets/preview")]
+    public async Task<PreviewResult> PreviewAsync(int id)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var item = _workspace.Get(id);
+            return await Task.Run(() => _previews!.Preview(item));
+        }
+        catch (EngineException e) { throw Wrap(e); }
+        catch (Exception e) { Logger.Error(e.Message); throw Wrap(new EngineException(ErrorCodes.DecodeFailed, e.Message)); }
         finally { _gate.Release(); }
     }
 
