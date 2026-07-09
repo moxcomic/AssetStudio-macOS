@@ -7,10 +7,12 @@ final class SmokeTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let fixture = root.appendingPathComponent("fixtures/char_118_yuki.ab").path
         app.launchEnvironment["ASSETSTUDIO_AUTOLOAD"] = fixture
-        let enginePath = root.appendingPathComponent("engine/publish/AssetStudioEngine").path
-        if FileManager.default.isExecutableFile(atPath: enginePath) {
-            app.launchEnvironment["ASSETSTUDIO_ENGINE_PATH"] = enginePath
-        } // else: the embedded engine from #19's post-build step is used
+        // Deliberately do NOT set ASSETSTUDIO_ENGINE_PATH: the launched app resolves
+        // its engine via Bundle.main.resourceURL/engine/AssetStudioEngine — the
+        // EMBEDDED engine that #19's post-build step copies into the built .app. This
+        // exercises the exact resolution path the shipped dist/AssetStudio.app uses,
+        // so a broken embed (wrong subpath, lost +x bit, missing sibling dylibs) fails
+        // THIS gate instead of shipping an "Engine Not Found" app.
         app.launch()
 
         let status = app.staticTexts["statusText"]
