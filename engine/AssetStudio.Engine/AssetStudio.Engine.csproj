@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>AssetStudioEngine</AssemblyName>
+    <RootNamespace>AssetStudio.Engine</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -15,13 +16,50 @@
     <ProjectReference Include="..\external\AssetStudioMod\AssetStudio\AssetStudio.csproj" />
     <ProjectReference Include="..\external\AssetStudioMod\AssetStudioUtility\AssetStudioUtility.csproj" />
   </ItemGroup>
+
+  <!--
+    Native library resolution (osx-arm64), deterministic + vendored-preferred.
+
+    We reach into AssetStudioCLI/Libraries/osx-arm64/ for the prebuilt dylibs even though we
+    deliberately do NOT reference the CLI project. Keep these paths in sync on the next
+    upstream re-vendor (see engine/external/VENDORED_COMMIT.txt).
+
+    Two classes of native, handled differently on purpose:
+
+    1) fmod / ooz / FBX  — NOT shipped by any NuGet package, so a flat copy at the app base is
+       unambiguous. Declared as <None CopyToOutputDirectory> (not a Copy target) so they flow
+       TRANSITIVELY into referencing projects' output (e.g. the test project) — a plain
+       AfterTargets Copy would only populate this project's own bin.
+
+    2) libTexture2DDecoderNative.dylib — ALSO provided by the Kyaru.Texture2DDecoder.macOS
+       NuGet package (pulled transitively via AssetStudioUtility). NuGet lands a DIFFERENT
+       binary (191,362 B) at the deps.json-registered path runtimes/osx-arm64/native/, while the
+       vendored build (258,512 B) is the one verified decoding on this machine. To keep exactly
+       ONE binary per lookup path with the vendored build winning, we do NOT copy it flat;
+       instead we OVERWRITE the NuGet copy at its registered runtimes path (build) and at the
+       RID-flattened publish root (publish). Flip to NuGet-owned only if a Task 6 texture test
+       ever shows the vendored binary decodes incorrectly.
+  -->
   <ItemGroup>
-    <EngineNative Include="..\external\AssetStudioMod\AssetStudioCLI\Libraries\osx-arm64\*.dylib" />
+    <EngineNativeFlat Include="..\external\AssetStudioMod\AssetStudioCLI\Libraries\osx-arm64\libfmod.dylib" />
+    <EngineNativeFlat Include="..\external\AssetStudioMod\AssetStudioCLI\Libraries\osx-arm64\libooz.dylib" />
+    <EngineNativeFlat Include="..\external\AssetStudioMod\AssetStudioCLI\Libraries\osx-arm64\libAssetStudioFBXNative.dylib" />
+    <None Include="@(EngineNativeFlat)" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" Visible="false" />
+    <EngineNativeTexture Include="..\external\AssetStudioMod\AssetStudioCLI\Libraries\osx-arm64\libTexture2DDecoderNative.dylib" />
   </ItemGroup>
-  <Target Name="CopyEngineNatives" AfterTargets="Build">
-    <Copy SourceFiles="@(EngineNative)" DestinationFolder="$(OutDir)" />
+
+  <Target Name="CheckEngineNatives" BeforeTargets="Build">
+    <Error Condition="'@(EngineNativeFlat)' == ''" Text="No flat osx-arm64 natives matched (fmod/ooz/FBX) — vendored path drift under AssetStudioCLI/Libraries/osx-arm64/." />
+    <Error Condition="'@(EngineNativeTexture)' == ''" Text="No osx-arm64 Texture2DDecoder native matched — vendored path drift under AssetStudioCLI/Libraries/osx-arm64/." />
   </Target>
-  <Target Name="PublishEngineNatives" AfterTargets="Publish">
-    <Copy SourceFiles="@(EngineNative)" DestinationFolder="$(PublishDir)" />
+
+  <!-- Overwrite the NuGet texture decoder at its deps.json-registered runtimes path with the vendored build. -->
+  <Target Name="OverwriteTextureNative" AfterTargets="Build">
+    <Copy SourceFiles="@(EngineNativeTexture)" DestinationFolder="$(OutDir)runtimes/osx-arm64/native" OverwriteReadOnlyFiles="true" />
+  </Target>
+
+  <!-- After a RID publish flattens runtimes/osx-arm64/native/* to the publish root, overwrite with the vendored build. -->
+  <Target Name="PublishTextureNative" AfterTargets="Publish">
+    <Copy SourceFiles="@(EngineNativeTexture)" DestinationFolder="$(PublishDir)" OverwriteReadOnlyFiles="true" />
   </Target>
 </Project>
