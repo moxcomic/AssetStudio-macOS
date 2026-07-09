@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(EngineController.self) private var controller
     @Environment(ExportCoordinator.self) private var exporter
+    @State private var isDropTarget = false
 
     var body: some View {
         @Bindable var controller = controller
@@ -19,6 +20,27 @@ struct ContentView: View {
         }
         .searchable(text: $controller.searchText, placement: .toolbar,
                     prompt: "Name, container or PathID")
+        // Drag Unity files or a folder onto the window to load them (same path as ⌘O).
+        .dropDestination(for: URL.self) { urls, _ in
+            let fileURLs = urls.filter(\.isFileURL)
+            guard !fileURLs.isEmpty else { return false }
+            Task { await controller.openFiles(fileURLs) }
+            return true
+        } isTargeted: { isDropTarget = $0 }
+        .overlay {
+            if isDropTarget {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(.tint, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                    .padding(6)
+                    .overlay {
+                        Label("Drop Unity files to load", systemImage: "square.and.arrow.down")
+                            .font(.title3.weight(.medium))
+                            .padding(20)
+                            .glassEffect(.regular, in: .capsule)
+                    }
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay {
             if case .loading(let current, let total) = controller.state {
                 VStack(spacing: 12) {

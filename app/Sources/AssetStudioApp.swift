@@ -82,4 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return .terminateLater
     }
+
+    /// Loads files dropped on the Dock icon or opened from Finder ("Open With").
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let fileURLs = urls.filter(\.isFileURL)
+        guard let controller, !fileURLs.isEmpty else { return }
+        Task { await controller.openFiles(fileURLs) }
+    }
 }
