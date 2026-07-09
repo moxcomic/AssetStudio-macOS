@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>AssetStudioEngine</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="StreamJsonRpc" Version="2.21.10" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\external\AssetStudioMod\AssetStudio\AssetStudio.csproj" />
+    <ProjectReference Include="..\external\AssetStudioMod\AssetStudioUtility\AssetStudioUtility.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EngineNative Include="..\external\AssetStudioMod\AssetStudioCLI\Libraries\osx-arm64\*.dylib" />
+  </ItemGroup>
+  <Target Name="CopyEngineNatives" AfterTargets="Build">
+    <Copy SourceFiles="@(EngineNative)" DestinationFolder="$(OutDir)" />
+  </Target>
+  <Target Name="PublishEngineNatives" AfterTargets="Publish">
+    <Copy SourceFiles="@(EngineNative)" DestinationFolder="$(PublishDir)" />
+  </Target>
+</Project>
