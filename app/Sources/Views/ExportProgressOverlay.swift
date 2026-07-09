@@ -10,7 +10,8 @@ struct ExportProgressOverlay: View {
                     .frame(width: 260)
                 Text("Exporting… \(current)/\(total)")
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                Button("Cancel", role: .cancel) { exporter.cancel() }
+                Button(exporter.cancelling ? "Cancelling…" : "Cancel", role: .cancel) { exporter.cancel() }
+                    .disabled(exporter.cancelling)
             }
             .padding(24)
             .glassEffect(.regular, in: .rect(cornerRadius: 20))
@@ -24,16 +25,21 @@ struct ExportReportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("\(summary.exported) exported, \(summary.skipped) skipped, \(summary.errors.count) failed",
-                  systemImage: summary.errors.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
-                .font(.headline)
-            if !summary.errors.isEmpty {
-                List(summary.errors) { e in
-                    VStack(alignment: .leading) {
-                        Text(e.name).bold()
-                        Text(e.message).font(.caption).foregroundStyle(.secondary)
-                    }
-                }.frame(minHeight: 160)
+            if summary.cancelled {
+                Label("Export cancelled", systemImage: "xmark.circle")
+                    .font(.headline)
+            } else {
+                Label("\(summary.exported) exported, \(summary.skipped) skipped, \(summary.errors.count) failed",
+                      systemImage: summary.errors.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
+                    .font(.headline)
+                if !summary.errors.isEmpty {
+                    List(Array(summary.errors.enumerated()), id: \.offset) { _, e in
+                        VStack(alignment: .leading) {
+                            Text(e.name).bold()
+                            Text(e.message).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.frame(minHeight: 160)
+                }
             }
             HStack {
                 Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([summary.destination]) }

@@ -41,10 +41,8 @@ struct ContentView: View {
             set: { if !$0 { controller.errorToast = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(controller.errorToast ?? "") }
-        .sheet(isPresented: $exporter.showReport) {
-            if case .finished(let summary) = exporter.phase {
-                ExportReportSheet(summary: summary)
-            }
+        .sheet(item: $exporter.report) { summary in
+            ExportReportSheet(summary: summary)
         }
         .navigationTitle("AssetStudio")
     }

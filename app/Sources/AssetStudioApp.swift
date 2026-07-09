@@ -32,15 +32,20 @@ struct AssetStudioApp: App {
             CommandMenu("Export") {
                 Button("Export Selected…") { exportSelected("convert") }
                     .keyboardShortcut("e")
+                    .disabled(controller.selection == nil)
                 Button("Export Filtered…") {
                     exporter.begin(ids: controller.visibleRows.map(\.id), mode: "convert", controller: controller)
                 }
+                .disabled(controller.visibleRows.isEmpty)
                 Button("Export All…") {
                     exporter.begin(ids: controller.rows.map(\.id), mode: "convert", controller: controller)
                 }
+                .disabled(controller.rows.isEmpty)
                 Divider()
                 Button("Export Raw Selected…") { exportSelected("raw") }
+                    .disabled(controller.selection == nil)
                 Button("Dump Selected…") { exportSelected("dump") }
+                    .disabled(controller.selection == nil)
             }
         }
 

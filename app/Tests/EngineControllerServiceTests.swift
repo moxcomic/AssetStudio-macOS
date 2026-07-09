@@ -274,10 +274,30 @@ final class EngineControllerServiceTests: XCTestCase {
         XCTAssertEqual(summary.exported, 5)
         XCTAssertEqual(summary.skipped, 1)
         XCTAssertTrue(summary.errors.isEmpty)
-        XCTAssertTrue(exporter.showReport)
+        XCTAssertFalse(summary.cancelled)
+        XCTAssertNotNil(exporter.report)
     }
 
     func testExportCoordinatorSurfacesEngineError() async {
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
+                              pages: [ListResult(total: 0, rows: [])],
+                              exportError: EngineError(code: "EXPORT_FAILED", message: "disk full"))
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        let exporter = ExportCoordinator()
+        exporter.start(ids: [1], mode: "convert", controller: controller,
+                       destination: URL(fileURLWithPath: "/tmp/export-test"))
+        await settle { if case .finished = exporter.phase { return true }; return false }
+        guard case .finished(let summary) = exporter.phase else {
+            return XCTFail("expected .finished, got \(exporter.phase)")
+        }
+        XCTAssertEqual(summary.exported, 0)
+        XCTAssertFalse(summary.cancelled)
+        XCTAssertEqual(summary.errors.count, 1)
+        XCTAssertTrue(summary.errors[0].message.contains("disk full"))
+    }
+
+    func testExportCoordinatorCancelledIsFirstClass() async {
         let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
                               pages: [ListResult(total: 0, rows: [])],
                               exportError: EngineError(code: "CANCELLED", message: "export cancelled"))
@@ -290,9 +310,8 @@ final class EngineControllerServiceTests: XCTestCase {
         guard case .finished(let summary) = exporter.phase else {
             return XCTFail("expected .finished, got \(exporter.phase)")
         }
-        XCTAssertEqual(summary.exported, 0)
-        XCTAssertEqual(summary.errors.count, 1)
-        XCTAssertTrue(summary.errors[0].message.contains("CANCELLED"))
+        XCTAssertTrue(summary.cancelled, "CANCELLED must be a first-class cancelled outcome")
+        XCTAssertTrue(summary.errors.isEmpty, "a deliberate cancel must not read as a failure")
     }
 
     func testExportCoordinatorCancelSendsRequestID() async {
@@ -305,11 +324,46 @@ final class EngineControllerServiceTests: XCTestCase {
         exporter.start(ids: [1, 2, 3], mode: "convert", controller: controller,
                        destination: URL(fileURLWithPath: "/tmp/export-test"))
         await settle { await fake.exportStarted }
-        for _ in 0..<10 { try? await Task.sleep(nanoseconds: 5_000_000) }   // let the coordinator record inFlight
-        exporter.cancel()
-        await settle { await fake.cancelledRequestID != nil }
+        // inFlight is assigned one main-actor hop after startExport returns, so poll
+        // the actual effect — retry cancel() until it lands — rather than sleeping.
+        for _ in 0..<400 {
+            exporter.cancel()
+            if await fake.cancelledRequestID != nil { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
         await fake.openExportGate()   // let the export finish so nothing dangles
         let cancelled = await fake.cancelledRequestID
         XCTAssertEqual(cancelled, 777)
+    }
+
+    func testProgressAfterFinishedIsDropped() {
+        let exporter = ExportCoordinator()
+        exporter.phase = .finished(ExportSummary(exported: 3, skipped: 0, errors: [],
+                                                 destination: URL(fileURLWithPath: "/tmp/x")))
+        exporter.updateProgress(ProgressNote(token: "export", current: 1, total: 10, message: nil))
+        guard case .finished = exporter.phase else {
+            return XCTFail("a progress note after .finished must not resurrect the HUD")
+        }
+    }
+
+    func testAcknowledgeResetsAndAllowsFreshExport() async {
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
+                              pages: [ListResult(total: 0, rows: [])],
+                              exportResult: ExportResult(exported: 1, skipped: 0, errors: []))
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        let exporter = ExportCoordinator()
+        exporter.phase = .finished(ExportSummary(exported: 1, skipped: 0, errors: [],
+                                                 destination: URL(fileURLWithPath: "/tmp/x")))
+        exporter.report = ExportSummary(exported: 1, skipped: 0, errors: [],
+                                        destination: URL(fileURLWithPath: "/tmp/x"))
+        exporter.acknowledge()
+        XCTAssertNil(exporter.report)
+        guard case .idle = exporter.phase else { return XCTFail("acknowledge must reset phase to .idle") }
+        exporter.start(ids: [1], mode: "convert", controller: controller,
+                       destination: URL(fileURLWithPath: "/tmp/x2"))
+        guard case .running = exporter.phase else {
+            return XCTFail("a fresh start() after acknowledge must be accepted")
+        }
     }
 }

@@ -7,14 +7,17 @@ enum ExportPhase: Equatable {
     case finished(ExportSummary)
 }
 
-struct ExportSummary: Equatable {
+struct ExportSummary: Equatable, Identifiable {
+    let id = UUID()
     let exported: Int
     let skipped: Int
     let errors: [ExportErrorEntry]
     let destination: URL
+    var cancelled = false
     static func == (l: Self, r: Self) -> Bool {
         l.exported == r.exported && l.skipped == r.skipped
             && l.errors.map(\.id) == r.errors.map(\.id) && l.destination == r.destination
+            && l.cancelled == r.cancelled
     }
 }
 
@@ -22,7 +25,11 @@ struct ExportSummary: Equatable {
 @Observable
 final class ExportCoordinator {
     var phase: ExportPhase = .idle
-    var showReport = false
+    /// Non-nil drives the report sheet via `.sheet(item:)` — no fragile
+    /// showReport/phase pattern-match coupling.
+    var report: ExportSummary? = nil
+    /// True from Cancel-clicked until the export resolves — for the HUD button.
+    var cancelling = false
     @ObservationIgnored private var inFlight: EngineClient.InFlightExport? = nil
     @ObservationIgnored var currentController: EngineController? = nil
 
@@ -42,25 +49,33 @@ final class ExportCoordinator {
     func start(ids: [Int], mode: String, controller: EngineController, destination dest: URL) {
         guard !ids.isEmpty, case .idle = phase, let client = controller.engineClient() else { return }
         currentController = controller
+        cancelling = false
         let d = UserDefaults.standard
         let params = ExportParams(ids: ids, mode: mode, destDir: dest.path,
                                   groupBy: d.string(forKey: "export.groupBy") ?? "containerPath",
                                   imageFormat: d.string(forKey: "export.imageFormat") ?? "png")
         phase = .running(current: 0, total: ids.count)
         Task {
+            let summary: ExportSummary
             do {
                 let flight = try await client.startExport(params)
                 self.inFlight = flight
                 let result = try await flight.result.value
-                self.phase = .finished(ExportSummary(exported: result.exported, skipped: result.skipped,
-                                                     errors: result.errors, destination: dest))
+                summary = ExportSummary(exported: result.exported, skipped: result.skipped,
+                                        errors: result.errors, destination: dest)
+            } catch let e as EngineError where e.code == "CANCELLED" {
+                // First-class outcome — a deliberate cancel is not a failure.
+                summary = ExportSummary(exported: 0, skipped: 0, errors: [],
+                                        destination: dest, cancelled: true)
             } catch {
                 let msg = (error as? EngineError)?.errorDescription ?? error.localizedDescription
-                self.phase = .finished(ExportSummary(exported: 0, skipped: 0,
-                    errors: [ExportErrorEntry(id: -1, name: "export", message: msg)], destination: dest))
+                summary = ExportSummary(exported: 0, skipped: 0,
+                    errors: [ExportErrorEntry(id: -1, name: "export", message: msg)], destination: dest)
             }
             self.inFlight = nil
-            self.showReport = true
+            self.cancelling = false
+            self.phase = .finished(summary)
+            self.report = summary
         }
     }
 
@@ -72,8 +87,12 @@ final class ExportCoordinator {
 
     func cancel() {
         guard let flight = inFlight, let client = currentController?.engineClient() else { return }
+        cancelling = true
         Task { await client.cancel(requestID: flight.requestID) }
     }
 
-    func acknowledge() { showReport = false; phase = .idle }
+    func acknowledge() {
+        report = nil
+        phase = .idle
+    }
 }
