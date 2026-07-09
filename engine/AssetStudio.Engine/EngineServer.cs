@@ -16,6 +16,7 @@ public class EngineServer
     private readonly SessionTempDir _tmp = new();
     private readonly AssemblyLoader _assemblyLoader = new();
     private PreviewService? _previews;
+    private ExportService? _exports;
     private JsonRpc? _rpc;
 
     public Workspace Workspace => _workspace;
@@ -29,6 +30,8 @@ public class EngineServer
         // Invalidate the preview cache + temp files whenever the workspace is cleared (load-time Reset,
         // workspace/reset, and post-Reset load failures). Fires inside the gate, so it is single-threaded.
         _workspace.OnReset += () => _previews?.InvalidateAll();
+        _exports = new ExportService(_workspace, _assemblyLoader);
+        _exports.Progress += (cur, total) => Notify("progress", new ProgressNote("export", cur, total, null));
     }
 
     private void Notify(string method, object arg)
@@ -118,6 +121,22 @@ public class EngineServer
         }
         catch (EngineException e) { throw Wrap(e); }
         catch (Exception e) { Logger.Error(e.Message); throw Wrap(new EngineException(ErrorCodes.DecodeFailed, e.Message)); }
+        finally { _gate.Release(); }
+    }
+
+    [JsonRpcMethod("assets/export")]
+    public async Task<ExportResult> ExportAsync(int[] ids, string mode, string destDir,
+        string groupBy, string imageFormat, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(() => _exports!.Export(ids,
+                new ExportRequestOptions(mode, destDir, groupBy, imageFormat), cancellationToken), cancellationToken);
+        }
+        catch (OperationCanceledException) { throw new LocalRpcException("export cancelled") { ErrorCode = -32800, ErrorData = new { code = ErrorCodes.Cancelled } }; }
+        catch (EngineException e) { throw Wrap(e); }
+        catch (Exception e) { Logger.Error(e.Message); throw Wrap(new EngineException(ErrorCodes.IoError, e.Message)); }
         finally { _gate.Release(); }
     }
 
