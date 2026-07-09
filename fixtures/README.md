@@ -1,17 +1,23 @@
 # Test fixtures
 
-Unity asset bundles from UnityPy's test suite (MIT):
-https://github.com/K0lb3/UnityPy/tree/master/tests/samples
-Downloaded via media.githubusercontent.com (LFS-resolved) on 2026-07-09.
+Unity asset bundles from UnityPy's test suite:
+https://github.com/K0lb3/UnityPy/tree/9a7c0ab9655bacd716e2af36fb950a92ec5109a5/tests/samples
+Downloaded via media.githubusercontent.com (LFS-resolved) on 2026-07-09, pinned to
+UnityPy commit `9a7c0ab9655bacd716e2af36fb950a92ec5109a5` (provenance ref; the
+committed bytes are pinned independently by the SHA-256 list below).
+
+Licensing: the MIT license covers UnityPy's own code and test suite. The asset
+payloads are third-party game assets redistributed by that suite and used here
+solely as read-only test data.
 
 | File | Notes |
 |---|---|
 | char_118_yuki.ab | UnityFS, Unity 5.6.7f1 — 35 AudioClip assets (verified via AssetStudioModCLI). Exact-contents fixture: **704951 bytes**. |
-| xinzexi_2_n_tex | UnityFS texture bundle |
+| xinzexi_2_n_tex | UnityFS bundle, Unity 2017.4.37f1 — Texture2D + Mesh (`xinzexi_2_n-mesh`) + Sprite + AssetBundle. Contains the mesh that `xinzexi_2_n_tex_mesh` is the exported reference for; "texture bundle" undersells it. *(inventory as reported by quality review via UnityPy parse)* |
 | xinzexi_2_n_tex_mesh | Wavefront OBJ (ASCII, CRLF) — golden mesh-export reference for `xinzexi_2_n_tex`. **NOT a UnityFS bundle** (see note). |
-| atlas_test | UnityFS sprite-atlas bundle |
-| banner_1 | UnityFS bundle |
-| corrupt.bin | 4 KB of /dev/urandom — must fail to parse without crashing |
+| atlas_test | UnityFS bundle, Unity 2018.4.11f1 — SpriteAtlas + 7 Sprites + Texture2D. *(inventory as reported by quality review via UnityPy parse)* |
+| banner_1 | UnityFS bundle, Unity 2018.4.4f1 — Sprite + Texture2D. *(inventory as reported by quality review via UnityPy parse)* |
+| corrupt.bin | 4 KB of /dev/urandom — must fail to parse without crashing. (libmagic / `file(1)` may mislabel it as an "OpenPGP Secret Key" because the random first byte happens to be 0x94; it is pure random noise, not a secret.) |
 
 > **Note on `xinzexi_2_n_tex_mesh`:** In UnityPy's sample set this file is the
 > exported OBJ mesh paired with the `xinzexi_2_n_tex` bundle — the *expected
