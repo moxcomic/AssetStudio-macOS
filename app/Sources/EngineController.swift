@@ -8,6 +8,26 @@ enum WorkspaceState: Equatable {
     case ready
 }
 
+enum PreviewState: Equatable {
+    case empty
+    case loading
+    case image(NSImage, PreviewMeta)
+    case text(String, PreviewMeta)
+    case none(PreviewMeta)
+    case failed(String)
+
+    static func == (l: Self, r: Self) -> Bool {
+        switch (l, r) {
+        case (.empty, .empty), (.loading, .loading): true
+        case (.image(let a, let m1), .image(let b, let m2)): a === b && m1.pathId == m2.pathId
+        case (.text(let a, let m1), .text(let b, let m2)): a == b && m1.pathId == m2.pathId
+        case (.none(let m1), .none(let m2)): m1.pathId == m2.pathId
+        case (.failed(let a), .failed(let b)): a == b
+        default: false
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class EngineController {
@@ -15,6 +35,9 @@ final class EngineController {
     var errorToast: String? = nil
     var capabilities: InitializeResult? = nil
     var unityVersion: String? = nil
+
+    /// Detail-pane preview for the current selection. Driven by `selectionChanged()`.
+    var preview: PreviewState = .empty
 
     /// Assign with `[weak self]` inside the closure to avoid a retain cycle:
     /// the controller owns the client whose notifications feed this back. (Task 10)
@@ -86,6 +109,9 @@ final class EngineController {
     /// and bails if a newer load/reset superseded it, so results from a stale
     /// engine workspace can never overwrite the current one.
     @ObservationIgnored private var loadGeneration = 0
+
+    /// The in-flight preview request; cancelled and replaced on each selection change.
+    @ObservationIgnored private var previewTask: Task<Void, Never>? = nil
 
     init(injectedClient: (any EngineServicing)? = nil) {
         self.injectedClient = injectedClient
@@ -175,6 +201,8 @@ final class EngineController {
             // Clear/replace only on success, so a failed reload preserves the
             // previously loaded workspace instead of wiping it.
             selection = nil
+            previewTask?.cancel()
+            preview = .empty
             rows = all
             unityVersion = load.unityVersion
             state = .ready
@@ -206,6 +234,8 @@ final class EngineController {
         loadGeneration += 1
         rows = []
         selection = nil
+        previewTask?.cancel()
+        preview = .empty
         unityVersion = nil
         state = .idle
         if let c = client { try? await c.reset() }
@@ -215,5 +245,46 @@ final class EngineController {
     func shutdownEngine() async {
         await client?.shutdown()
         client = nil
+    }
+
+    /// Requests a preview for the current selection, coalescing rapid changes
+    /// (each call cancels the prior request) and dropping results from a stale
+    /// selection or a superseded workspace generation. A missing temp file (the
+    /// engine deletes preview paths on the next load/reset) surfaces as an
+    /// expired-preview state rather than a hard error.
+    func selectionChanged() {
+        previewTask?.cancel()
+        guard let id = selection, let c = client else { preview = .empty; return }
+        preview = .loading
+        let gen = loadGeneration
+        previewTask = Task { [weak self] in
+            do {
+                let r = try await c.preview(id: id)
+                guard !Task.isCancelled, let self, gen == self.loadGeneration else { return }
+                switch r.kind {
+                case "image":
+                    if let path = r.path, let img = NSImage(contentsOfFile: path) {
+                        self.preview = .image(img, r.meta)
+                    } else {
+                        self.preview = .failed("Preview expired — reselect the asset")
+                    }
+                case "text":
+                    if let inline = r.text {
+                        self.preview = .text(inline, r.meta)
+                    } else if let path = r.path,
+                              let s = try? String(contentsOfFile: path, encoding: .utf8) {
+                        self.preview = .text(s, r.meta)
+                    } else {
+                        self.preview = .failed("Preview expired — reselect the asset")
+                    }
+                default:
+                    self.preview = .none(r.meta)
+                }
+            } catch is CancellationError {
+            } catch {
+                guard let self, !Task.isCancelled, gen == self.loadGeneration else { return }
+                self.preview = .failed(error.localizedDescription)
+            }
+        }
     }
 }

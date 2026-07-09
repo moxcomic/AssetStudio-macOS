@@ -19,12 +19,23 @@ actor FakeEngine: EngineServicing {
     private(set) var loadEntered = false
     private var gateWaiter: CheckedContinuation<Void, Never>?
 
-    init(loadResult: LoadResult, pages: [ListResult], gateLoad: Bool = false) {
+    // Optional preview scripting + gate (preview-expiry / preview-supersession tests).
+    private let previewResult: PreviewResult
+    private let gatePreview: Bool
+    private(set) var previewEntered = false
+    private var previewGateWaiter: CheckedContinuation<Void, Never>?
+
+    init(loadResult: LoadResult, pages: [ListResult], gateLoad: Bool = false,
+         previewResult: PreviewResult = PreviewResult(kind: "none", path: nil, text: nil,
+             meta: PreviewMeta(name: "", type: "", container: "", pathId: 0, size: 0, extra: [:])),
+         gatePreview: Bool = false) {
         (notifications, notifyCont) = AsyncStream.makeStream(of: EngineNotification.self)
         (processExited, exitCont) = AsyncStream.makeStream(of: Int32.self)
         self.loadResult = loadResult
         self.pages = pages
         self.gateLoad = gateLoad
+        self.previewResult = previewResult
+        self.gatePreview = gatePreview
     }
 
     func initialize() async throws -> InitializeResult {
@@ -49,8 +60,16 @@ actor FakeEngine: EngineServicing {
     }
     func reset() async throws {}
     func preview(id: Int) async throws -> PreviewResult {
-        PreviewResult(kind: "none", path: nil, text: nil,
-                      meta: PreviewMeta(name: "", type: "", container: "", pathId: 0, size: 0, extra: [:]))
+        previewEntered = true
+        if gatePreview {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in previewGateWaiter = cont }
+        }
+        return previewResult
+    }
+
+    func openPreviewGate() {
+        previewGateWaiter?.resume()
+        previewGateWaiter = nil
     }
     func export(_ params: ExportParams) async throws -> ExportResult {
         ExportResult(exported: 0, skipped: 0, errors: [])
@@ -66,6 +85,10 @@ final class EngineControllerServiceTests: XCTestCase {
     private func row(_ id: Int, _ name: String, _ type: String) -> AssetRow {
         AssetRow(id: id, name: name, container: "c/\(name)", type: type,
                  pathId: Int64(id), size: 100, sourceFile: "f.assets")
+    }
+
+    private func meta(_ pathId: Int64) -> PreviewMeta {
+        PreviewMeta(name: "n", type: "Texture2D", container: "c", pathId: pathId, size: 10, extra: [:])
     }
 
     func testPaginationAccumulatesAcrossPages() async {
@@ -129,5 +152,46 @@ final class EngineControllerServiceTests: XCTestCase {
         XCTAssertTrue(controller.rows.isEmpty, "superseded load must not populate rows")
         XCTAssertEqual(controller.state, .idle, "reset's state must survive the superseded load")
         XCTAssertNil(controller.unityVersion, "superseded load must not set unityVersion")
+    }
+
+    func testImagePreviewMissingFileFails() async {
+        // Engine reports an image preview but the temp file is gone (expired): the
+        // NSImage load fails and the pane lands in .failed instead of crashing.
+        let bogus = PreviewResult(kind: "image", path: "/nonexistent/preview.png", text: nil, meta: meta(7))
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
+                              pages: [ListResult(total: 1, rows: [row(7, "t", "Texture2D")])],
+                              previewResult: bogus)
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        controller.selection = 7
+        controller.selectionChanged()
+        for _ in 0..<400 {
+            if case .failed = controller.preview { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        guard case .failed = controller.preview else {
+            return XCTFail("expected .failed, got \(controller.preview)")
+        }
+    }
+
+    func testSupersededPreviewWritesNothing() async {
+        // A preview parks in the gated preview(); a reset bumps the generation and
+        // cancels the task, so on resume it must not overwrite the reset's .empty.
+        let img = PreviewResult(kind: "image", path: "/nonexistent/preview.png", text: nil, meta: meta(9))
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
+                              pages: [ListResult(total: 1, rows: [row(9, "t", "Texture2D")])],
+                              previewResult: img, gatePreview: true)
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        controller.selection = 9
+        controller.selectionChanged()                        // preview = .loading, parks in preview()
+        for _ in 0..<400 {
+            if await fake.previewEntered { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await controller.resetWorkspace()                    // bumps generation, cancels task, preview = .empty
+        await fake.openPreviewGate()                         // let the preview task resume
+        for _ in 0..<20 { try? await Task.sleep(nanoseconds: 5_000_000) }   // let it run to completion
+        XCTAssertEqual(controller.preview, .empty, "superseded preview must not overwrite the reset state")
     }
 }
