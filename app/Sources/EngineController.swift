@@ -117,6 +117,10 @@ final class EngineController {
             listenForNotifications(c)
             listenForExit(c)
         } catch {
+            // initialize() failed after a successful start(): terminate the child
+            // now, else it is orphaned for the app's lifetime (client stays nil, so
+            // the app-quit shutdownEngine() could never reach it).
+            await c.shutdown()
             state = .engineMissing(error.localizedDescription)
         }
     }

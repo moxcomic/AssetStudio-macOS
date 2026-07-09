@@ -14,18 +14,35 @@ actor FakeEngine: EngineServicing {
     private var listCalls = 0
     private(set) var shutdownCalled = false
 
-    init(loadResult: LoadResult, pages: [ListResult]) {
+    // Optional gate so a test can park load() mid-flight (generation-guard test).
+    private let gateLoad: Bool
+    private(set) var loadEntered = false
+    private var gateWaiter: CheckedContinuation<Void, Never>?
+
+    init(loadResult: LoadResult, pages: [ListResult], gateLoad: Bool = false) {
         (notifications, notifyCont) = AsyncStream.makeStream(of: EngineNotification.self)
         (processExited, exitCont) = AsyncStream.makeStream(of: Int32.self)
         self.loadResult = loadResult
         self.pages = pages
+        self.gateLoad = gateLoad
     }
 
     func initialize() async throws -> InitializeResult {
         InitializeResult(engineVersion: "fake", coreVersion: "fake",
                          natives: NativeCaps(texture: true, fbx: true, fmod: true))
     }
-    func load(paths: [String], unityVersion: String?, loadAll: Bool) async throws -> LoadResult { loadResult }
+    func load(paths: [String], unityVersion: String?, loadAll: Bool) async throws -> LoadResult {
+        loadEntered = true
+        if gateLoad {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in gateWaiter = cont }
+        }
+        return loadResult
+    }
+
+    func openGate() {
+        gateWaiter?.resume()
+        gateWaiter = nil
+    }
     func list(offset: Int, limit: Int) async throws -> ListResult {
         defer { listCalls += 1 }
         return listCalls < pages.count ? pages[listCalls] : ListResult(total: pages.last?.total ?? 0, rows: [])
@@ -89,5 +106,28 @@ final class EngineControllerServiceTests: XCTestCase {
         XCTAssertNil(controller.engineClient())
         XCTAssertEqual(controller.state, .idle)
         XCTAssertNotNil(controller.errorToast)
+    }
+
+    func testSupersededLoadWritesNothing() async {
+        // Load A parks inside the gated load(); a reset bumps loadGeneration while A
+        // is suspended, so when A resumes it must observe the newer generation and
+        // leave rows/state/unityVersion untouched.
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 2, unityVersion: "A-version"),
+                              pages: [ListResult(total: 2, rows: [row(1, "a", "Texture2D"), row(2, "b", "Texture2D")])],
+                              gateLoad: true)
+        let controller = EngineController(injectedClient: fake)
+        let loadA = Task { await controller.openFiles([URL(fileURLWithPath: "/tmp/a")]) }
+
+        for _ in 0..<400 {                                   // wait until A is parked inside load()
+            if await fake.loadEntered { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await controller.resetWorkspace()                    // bumps loadGeneration, clears workspace
+        await fake.openGate()                                // let A resume
+        await loadA.value
+
+        XCTAssertTrue(controller.rows.isEmpty, "superseded load must not populate rows")
+        XCTAssertEqual(controller.state, .idle, "reset's state must survive the superseded load")
+        XCTAssertNil(controller.unityVersion, "superseded load must not set unityVersion")
     }
 }
