@@ -16,6 +16,13 @@ struct AssetStudioApp: App {
                     controller.onExportProgress = { [weak exporter] note in exporter?.updateProgress(note) }
                     exporter.currentController = controller
                     await controller.startEngineIfNeeded()
+                    // Test-only E2E hook: autoload a fixture so the smoke test can assert
+                    // the real launch → engine-spawn → load → table pipeline. Sequenced
+                    // after startEngineIfNeeded in the SAME task to avoid a double-start
+                    // race (openFiles calls startEngineIfNeeded, which by now is a no-op).
+                    if let auto = ProcessInfo.processInfo.environment["ASSETSTUDIO_AUTOLOAD"], !auto.isEmpty {
+                        await controller.openFiles([URL(fileURLWithPath: auto)])
+                    }
                 }
                 .onAppear { appDelegate.controller = controller }
         }

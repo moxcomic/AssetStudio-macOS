@@ -45,9 +45,19 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/AssetStudio.app/Contents/MacOS/AssetStudio"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  AssetStudioUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [UITests]
+    dependencies:
+      - target: AssetStudio
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: AssetStudio
 schemes:
   AssetStudio:
     build:
-      targets: { AssetStudio: all, AssetStudioTests: [test] }
+      targets: { AssetStudio: all, AssetStudioTests: [test], AssetStudioUITests: [test] }
     test:
-      targets: [AssetStudioTests]
+      targets: [AssetStudioTests, AssetStudioUITests]
