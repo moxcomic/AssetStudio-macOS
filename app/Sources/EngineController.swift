@@ -11,20 +11,44 @@ enum WorkspaceState: Equatable {
 @Observable
 final class EngineController {
     var state: WorkspaceState = .idle
-    var rows: [AssetRow] = []
-    var searchText = ""
-    var selectedType: String? = nil
-    var selection: AssetRow.ID? = nil
-    var sortOrder: [KeyPathComparator<AssetRow>] = [KeyPathComparator(\.name)]
-    var errorToast: String? = nil
 
-    var typeCounts: [(type: String, count: Int)] {
-        Dictionary(grouping: rows, by: \.type)
-            .map { (type: $0.key, count: $0.value.count) }
-            .sorted { $0.type < $1.type }
+    /// All assets in the loaded workspace. Assigning triggers a recompute of the
+    /// memoized `typeCounts` and `visibleRows`.
+    var rows: [AssetRow] = [] {
+        didSet {
+            recomputeTypeCounts()
+            recomputeVisible()
+        }
     }
 
-    var visibleRows: [AssetRow] {
+    var searchText = "" {
+        didSet { recomputeVisible() }
+    }
+
+    var selectedType: String? = nil {
+        didSet { recomputeVisible() }
+    }
+
+    var selection: AssetRow.ID? = nil
+
+    var sortOrder: [KeyPathComparator<AssetRow>] = [KeyPathComparator(\.name)] {
+        didSet { recomputeVisible() }
+    }
+
+    var errorToast: String? = nil
+
+    /// Assets matching the current type filter and search text, sorted by
+    /// `sortOrder`. Memoized: recomputed only when an input changes (`rows`,
+    /// `searchText`, `selectedType`, `sortOrder`), so reads from `body` are O(1)
+    /// and typing no longer re-filters/re-sorts twice per render.
+    private(set) var visibleRows: [AssetRow] = []
+
+    /// `(type, count)` pairs over all loaded `rows`, sorted by type. Memoized:
+    /// recomputed only when `rows` changes, so selecting a sidebar type does not
+    /// re-group the whole array.
+    private(set) var typeCounts: [(type: String, count: Int)] = []
+
+    private func recomputeVisible() {
         var out = rows
         if let t = selectedType { out = out.filter { $0.type == t } }
         if !searchText.isEmpty {
@@ -35,6 +59,12 @@ final class EngineController {
                     || String($0.pathId).contains(q)
             }
         }
-        return out.sorted(using: sortOrder)
+        visibleRows = out.sorted(using: sortOrder)
+    }
+
+    private func recomputeTypeCounts() {
+        typeCounts = Dictionary(grouping: rows, by: \.type)
+            .map { (type: $0.key, count: $0.value.count) }
+            .sorted { $0.type < $1.type }
     }
 }
