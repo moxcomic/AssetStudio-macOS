@@ -21,3 +21,20 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_APP_SANDBOX: NO
         SWIFT_STRICT_CONCURRENCY: complete
+  AssetStudioTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    dependencies:
+      - target: AssetStudio
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/AssetStudio.app/Contents/MacOS/AssetStudio"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  AssetStudio:
+    build:
+      targets: { AssetStudio: all, AssetStudioTests: [test] }
+    test:
+      targets: [AssetStudioTests]
