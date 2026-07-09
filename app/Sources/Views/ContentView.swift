@@ -17,6 +17,27 @@ struct ContentView: View {
         }
         .searchable(text: $controller.searchText, placement: .toolbar,
                     prompt: "Name, container or PathID")
+        .overlay {
+            if case .loading(let current, let total) = controller.state {
+                VStack(spacing: 12) {
+                    ProgressView(value: total > 0 ? Double(current) : nil,
+                                 total: Double(max(total, 1)))
+                        .frame(width: 240)
+                    Text(total > 0 ? "Reading assets… \(current)/\(total)" : "Loading files…")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .padding(24)
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            } else if case .engineMissing(let why) = controller.state {
+                ContentUnavailableView("Engine Not Found", systemImage: "exclamationmark.triangle",
+                    description: Text(why))
+            }
+        }
+        .alert("AssetStudio", isPresented: .init(
+            get: { controller.errorToast != nil },
+            set: { if !$0 { controller.errorToast = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(controller.errorToast ?? "") }
         .navigationTitle("AssetStudio")
     }
 }

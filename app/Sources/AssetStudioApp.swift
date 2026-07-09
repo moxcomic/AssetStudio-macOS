@@ -8,7 +8,18 @@ struct AssetStudioApp: App {
         WindowGroup {
             ContentView()
                 .environment(controller)
+                .task { await controller.startEngineIfNeeded() }
         }
-        .windowStyle(.automatic)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Open Files…") { controller.presentOpenPanel(directories: false) }
+                    .keyboardShortcut("o")
+                Button("Open Folder…") { controller.presentOpenPanel(directories: true) }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+                Divider()
+                Button("Reset Workspace") { Task { await controller.resetWorkspace() } }
+                    .keyboardShortcut("w", modifiers: [.command, .option])
+            }
+        }
     }
 }

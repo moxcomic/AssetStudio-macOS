@@ -64,4 +64,22 @@ final class FrameParserTests: XCTestCase {
         XCTAssertEqual(out.count, 1)
         XCTAssertEqual(String(decoding: out[0], as: UTF8.self), #"{"ok":true}"#)
     }
+
+    // Issue-7 guard locks: a corrupt Content-Length is dropped without trapping
+    // or stalling, and a valid frame fed afterward still parses.
+    func testNegativeContentLengthDroppedThenRecovers() {
+        var p = FrameParser()
+        XCTAssertTrue(p.feed(Data("Content-Length: -1\r\n\r\n".utf8)).isEmpty)   // would trap prefix(-1) without the guard
+        let out = p.feed(frame(#"{"ok":true}"#))
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(String(decoding: out[0], as: UTF8.self), #"{"ok":true}"#)
+    }
+
+    func testOverCapContentLengthDroppedThenRecovers() {
+        var p = FrameParser()
+        XCTAssertTrue(p.feed(Data("Content-Length: 999999999\r\n\r\n".utf8)).isEmpty)   // ~1GB > 512MB cap
+        let out = p.feed(frame(#"{"ok":true}"#))
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(String(decoding: out[0], as: UTF8.self), #"{"ok":true}"#)
+    }
 }
