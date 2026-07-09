@@ -271,9 +271,11 @@ final class EngineController {
                 case "text":
                     if let inline = r.text {
                         self.preview = .text(inline, r.meta)
-                    } else if let path = r.path,
-                              let s = try? String(contentsOfFile: path, encoding: .utf8) {
-                        self.preview = .text(s, r.meta)
+                    } else if let path = r.path {
+                        let s = await Self.readTextFile(path)   // read off the main actor
+                        guard !Task.isCancelled, gen == self.loadGeneration else { return }
+                        self.preview = s.map { .text($0, r.meta) }
+                            ?? .failed("Preview expired — reselect the asset")
                     } else {
                         self.preview = .failed("Preview expired — reselect the asset")
                     }
@@ -286,5 +288,11 @@ final class EngineController {
                 self.preview = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// Reads a preview text file off the main actor (nonisolated `async`), so a
+    /// large dump doesn't block the UI while it's read.
+    private nonisolated static func readTextFile(_ path: String) async -> String? {
+        try? String(contentsOfFile: path, encoding: .utf8)
     }
 }

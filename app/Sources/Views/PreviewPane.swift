@@ -12,8 +12,9 @@ struct PreviewPane: View {
                         description: Text("Select an asset to preview it"))
                 case .loading:
                     ProgressView()
-                case .image(let image, _):
+                case .image(let image, let meta):
                     ImagePreviewView(image: image)
+                        .id(meta.pathId)   // fresh zoom/pan/channel state per asset
                 case .text(let text, _):
                     TextPreviewView(text: text)
                 case .none(let meta):

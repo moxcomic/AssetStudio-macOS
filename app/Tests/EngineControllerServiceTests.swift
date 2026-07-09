@@ -174,6 +174,26 @@ final class EngineControllerServiceTests: XCTestCase {
         }
     }
 
+    func testTextPreviewInlineLandsInTextState() async {
+        let txt = PreviewResult(kind: "text", path: nil, text: "hello\nworld", meta: meta(11))
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
+                              pages: [ListResult(total: 1, rows: [row(11, "t", "TextAsset")])],
+                              previewResult: txt)
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        controller.selection = 11
+        controller.selectionChanged()
+        for _ in 0..<400 {
+            if case .text = controller.preview { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        guard case .text(let s, let m) = controller.preview else {
+            return XCTFail("expected .text, got \(controller.preview)")
+        }
+        XCTAssertEqual(s, "hello\nworld")
+        XCTAssertEqual(m.pathId, 11)
+    }
+
     func testSupersededPreviewWritesNothing() async {
         // A preview parks in the gated preview(); a reset bumps the generation and
         // cancels the task, so on resume it must not overwrite the reset's .empty.
