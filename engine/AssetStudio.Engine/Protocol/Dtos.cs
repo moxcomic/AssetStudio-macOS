@@ -8,7 +8,7 @@ public record ListResult(int Total, IReadOnlyList<AssetRowDto> Rows);
 public record ProgressNote(string Token, int Current, int Total, string? Message);
 public record LogNote(string Level, string Message);
 public record ExportErrorDto(int Id, string Name, string Message);
-public record ExportResult(int Exported, int Skipped, List<ExportErrorDto> Errors);
+public record ExportResult(int Exported, int Skipped, IReadOnlyList<ExportErrorDto> Errors);
 
 public static class ErrorCodes
 {

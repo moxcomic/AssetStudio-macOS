@@ -21,13 +21,9 @@ public class ExportService
     {
         if (!Directory.Exists(req.DestDir))
             throw new EngineException(ErrorCodes.IoError, $"destination does not exist: {req.DestDir}");
-        var imageFormat = req.ImageFormat.ToLowerInvariant() switch
-        {
-            "png" => ImageFormat.Png, "tga" => ImageFormat.Tga, "jpg" or "jpeg" => ImageFormat.Jpeg,
-            "bmp" => ImageFormat.Bmp, "webp" => ImageFormat.Webp,
-            _ => throw new EngineException(ErrorCodes.IoError, $"unknown imageFormat {req.ImageFormat}"),
-        };
-        var options = new ExportOptions(imageFormat);
+        // imageFormat is validated lazily inside the image exporters — raw/dump/audio must not require it.
+        var options = new ExportOptions(req.ImageFormat);
+        var fullDest = Path.GetFullPath(req.DestDir);
         _exporters.ResetSession();
 
         int exported = 0, skipped = 0;
@@ -35,9 +31,11 @@ public class ExportService
         for (var n = 0; n < ids.Length; n++)
         {
             ct.ThrowIfCancellationRequested();
-            var item = _workspace.Get(ids[n]);
+            var id = ids[n];
+            EngineAssetItem? item = null;
             try
             {
+                item = _workspace.Get(id); // inside the try so a bad id is a per-asset error, not a batch abort
                 // Grouping mirrors vendored Studio.ExportAssets group options.
                 var dir = req.GroupBy switch
                 {
@@ -53,6 +51,12 @@ public class ExportService
                             item.SourceFile.fileName),
                     _ => req.DestDir,
                 };
+                // Containment: item.Container is hostile-controllable bundle data (may hold ".." or a rooted
+                // path); reject anything that resolves outside destDir before any file is written.
+                var fullDir = Path.GetFullPath(dir);
+                if (fullDir != fullDest && !fullDir.StartsWith(fullDest + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                    throw new EngineException(ErrorCodes.IoError, $"grouping path escapes destination: {item.Container}");
+
                 var ok = req.Mode switch
                 {
                     "convert" => _exporters.ExportConvert(item, dir, options),
@@ -65,10 +69,12 @@ public class ExportService
             catch (OperationCanceledException) { throw; }
             catch (Exception e)
             {
-                errors.Add(new ExportErrorDto(item.Id, item.Text, e.Message));
+                errors.Add(new ExportErrorDto(id, item?.Text ?? "", e.Message));
             }
             Progress?.Invoke(n + 1, ids.Length);
         }
-        return new ExportResult(exported, skipped, errors); // skipped = dedupe-collisions only
+        // skipped = asset produced no file: a dedupe-collision (name already used this session) OR the
+        // exporter reported nothing exportable (empty mesh, null font data, video with no external resource).
+        return new ExportResult(exported, skipped, errors);
     }
 }

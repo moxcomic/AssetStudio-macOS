@@ -40,7 +40,7 @@ public class EngineServer
         {
             var t = _rpc?.NotifyWithParameterObjectAsync(method, arg);
             // Observe async faults (channel closing mid-send) so they don't surface as UnobservedTaskException.
-            t?.ContinueWith(static tt => { _ = tt.Exception; },
+            _ = t?.ContinueWith(static tt => { _ = tt.Exception; },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);

@@ -29,5 +29,8 @@ rpc.AddLocalRpcTarget(server, null);
 server.Attach(rpc);
 rpc.StartListening();
 Console.Error.WriteLine("AssetStudioEngine listening on stdio");
+// rpc.Completion is this server's own connection lifetime; awaiting it IS the main loop (VSTHRD003 false positive).
+#pragma warning disable VSTHRD003
 await rpc.Completion;
+#pragma warning restore VSTHRD003
 return 0;

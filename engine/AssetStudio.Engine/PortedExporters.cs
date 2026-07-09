@@ -10,7 +10,7 @@ using Object = AssetStudio.Object;
 
 namespace AssetStudio.Engine;
 
-public record ExportOptions(ImageFormat ImageFormat);
+public record ExportOptions(string ImageFormat);
 
 public class PortedExporters
 {
@@ -33,9 +33,23 @@ public class PortedExporters
         Directory.CreateDirectory(dir);
         fullPath = Path.Combine(dir, FixFileName(item.Text) + extension);
         if (_seenPaths.Add(fullPath)) return true;
-        fullPath = Path.Combine(dir, $"{FixFileName(item.Text)} #{item.PathId}{extension}");
+        // Collision suffix must be UniqueId ("_#i", session-unique across ALL loaded files), NOT PathId
+        // (only unique within one SerializedFile — cross-bundle PathId ties would silently drop an asset).
+        fullPath = Path.Combine(dir, FixFileName(item.Text) + item.UniqueId + extension);
         return _seenPaths.Add(fullPath);
     }
+
+    // Resolve the image format string lazily (only the image exporters call this) so raw/dump/audio/mesh
+    // never require a valid imageFormat; an unknown value on an actual image export surfaces as IO_ERROR.
+    private static (ImageFormat fmt, string ext) ResolveImageFormat(string s) => s.ToLowerInvariant() switch
+    {
+        "png" => (ImageFormat.Png, ".png"),
+        "tga" => (ImageFormat.Tga, ".tga"),
+        "jpg" or "jpeg" => (ImageFormat.Jpeg, ".jpg"),
+        "bmp" => (ImageFormat.Bmp, ".bmp"),
+        "webp" => (ImageFormat.Webp, ".webp"),
+        _ => throw new EngineException(ErrorCodes.IoError, $"unknown imageFormat {s}"),
+    };
 
     public bool ExportConvert(EngineAssetItem item, string dir, ExportOptions options)
     {
@@ -60,13 +74,13 @@ public class PortedExporters
 
     private bool ExportTexture2D(EngineAssetItem item, Texture2D m_Texture2D, string dir, ExportOptions options)
     {
-        var ext = "." + options.ImageFormat.ToString().ToLowerInvariant().Replace("jpeg", "jpg");
+        var (fmt, ext) = ResolveImageFormat(options.ImageFormat);
         if (!TryBuildPath(dir, item, ext, out var path)) return false;
         using var image = m_Texture2D.ConvertToImage(flip: true);
         if (image == null) throw new EngineException(ErrorCodes.DecodeFailed,
             $"texture decode failed ({m_Texture2D.m_TextureFormat})");
-        using var fs = File.OpenWrite(path);
-        image.WriteToStream(fs, options.ImageFormat);
+        using var fs = File.Create(path); // truncates — File.OpenWrite would leave a stale tail on a shorter re-export
+        image.WriteToStream(fs, fmt);
         return true;
     }
 
@@ -85,12 +99,12 @@ public class PortedExporters
 
     private bool ExportSprite(EngineAssetItem item, Sprite m_Sprite, string dir, ExportOptions options)
     {
-        var ext = "." + options.ImageFormat.ToString().ToLowerInvariant().Replace("jpeg", "jpg");
+        var (fmt, ext) = ResolveImageFormat(options.ImageFormat);
         if (!TryBuildPath(dir, item, ext, out var path)) return false;
         using var image = m_Sprite.GetImage();
         if (image == null) throw new EngineException(ErrorCodes.DecodeFailed, "sprite image unavailable");
-        using var fs = File.OpenWrite(path);
-        image.WriteToStream(fs, options.ImageFormat);
+        using var fs = File.Create(path); // truncates — see ExportTexture2D
+        image.WriteToStream(fs, fmt);
         return true;
     }
 

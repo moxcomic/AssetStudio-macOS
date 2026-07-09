@@ -1,4 +1,5 @@
 using Newtonsoft.Json.Linq;
+using SixLabors.ImageSharp;
 using Xunit;
 
 namespace AssetStudio.Engine.Tests;
@@ -96,5 +97,50 @@ public class ExportTests
             new { ids = new[] { 0, 1, 2 }, mode = "raw", destDir = dest, groupBy = "containerPath", imageFormat = "png" }, 300);
         Assert.True(Directory.Exists(dest));
         Assert.True(Directory.GetFiles(dest, "*", SearchOption.AllDirectories).Length >= 3);
+    }
+
+    [Fact]
+    public void ReExportOverwritesWithoutCorruption()
+    {
+        var (c, dest) = Prep("xinzexi_2_n_tex");
+        using var _ = c;
+        var id = ((JArray)c.Request("assets/list", new { offset = 0, limit = 100000 })["rows"]!)
+            .First(r => r["type"]!.Value<string>() == "Texture2D")["id"]!.Value<int>();
+        c.Request("assets/export",
+            new { ids = new[] { id }, mode = "convert", destDir = dest, groupBy = "none", imageFormat = "png" }, 300);
+        var png = Directory.GetFiles(dest, "*.png").Single();
+        var goodLen = new FileInfo(png).Length;
+        // Simulate a previous, larger export at the same name by appending trailing garbage.
+        using (var fs = new FileStream(png, FileMode.Append)) fs.Write(new byte[(int)goodLen]);
+        Assert.True(new FileInfo(png).Length > goodLen);
+        // Re-export: File.Create must truncate, not leave a stale tail (File.OpenWrite would corrupt).
+        c.Request("assets/export",
+            new { ids = new[] { id }, mode = "convert", destDir = dest, groupBy = "none", imageFormat = "png" }, 300);
+        Assert.Equal(goodLen, new FileInfo(png).Length);
+        using var img = Image.Load(png); // decodes cleanly — no trailing garbage
+        Assert.True(img.Width > 0);
+    }
+
+    [Fact]
+    public void BadIdBecomesPerAssetErrorNotBatchAbort()
+    {
+        var (c, dest) = Prep("char_118_yuki.ab");
+        using var _ = c;
+        var r = c.Request("assets/export",
+            new { ids = new[] { 0, 999999 }, mode = "raw", destDir = dest, groupBy = "none", imageFormat = "png" }, 300);
+        Assert.Equal(1, r["exported"]!.Value<int>()); // id 0 still exported despite the bad id
+        var errors = (JArray)r["errors"]!;
+        Assert.Contains(errors, e => e["id"]!.Value<int>() == 999999); // bad id → per-asset error entry
+    }
+
+    [Fact]
+    public void ExportRespectsPreCanceledToken()
+    {
+        var dest = Path.Combine(Path.GetTempPath(), "ase-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dest);
+        var svc = new ExportService(new Workspace(), new AssemblyLoader());
+        var opts = new ExportRequestOptions("raw", dest, "none", "png");
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            svc.Export(new[] { 0 }, opts, new CancellationToken(canceled: true)));
     }
 }
