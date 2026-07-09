@@ -30,6 +30,7 @@ struct ImagePreviewView: View {
                         .aspectRatio(contentMode: .fit)
                         .scaleEffect(zoom)
                         .offset(offset)
+                        .accessibilityIdentifier("previewImage")   // E2E success signal
                 }
                 .clipped()
                 .gesture(

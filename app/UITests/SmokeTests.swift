@@ -30,4 +30,45 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.tables.firstMatch.exists || app.outlines.firstMatch.exists,
                       "asset table not found")
     }
+
+    /// Proves a Texture2D decodes through the EMBEDDED engine + its vendored native
+    /// texture decoder in the shipped layout — the app's whole point. Non-vacuous:
+    /// if the native didn't resolve, the engine returns none/error → the preview
+    /// lands in .none/.failed → `previewImage` never appears → this fails.
+    func testTextureDecodesThroughEmbeddedEngine() throws {
+        let app = XCUIApplication()
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        app.launchEnvironment["ASSETSTUDIO_AUTOLOAD"] = root.appendingPathComponent("fixtures/xinzexi_2_n_tex").path
+        // No ASSETSTUDIO_ENGINE_PATH → embedded engine (shipped path).
+        app.launch()
+
+        let status = app.staticTexts["statusText"]
+        XCTAssertTrue(status.waitForExistence(timeout: 60), "statusText never appeared")
+        func statusString() -> String { (status.value as? String) ?? status.label }
+        let d1 = Date().addingTimeInterval(60)
+        while Date() < d1 {
+            let s = statusString()
+            if !s.isEmpty && !s.contains("0 of 0") { break }
+            usleep(300_000)
+        }
+        XCTAssertFalse(statusString().isEmpty || statusString().contains("0 of 0"),
+                       "no assets loaded: '\(statusString())'")
+
+        // Select a Texture2D row from the asset table (identifier from Task 2), which
+        // scopes the "Texture2D" match to the table and excludes the sidebar's entry.
+        let assetTable = app.tables["assetTable"]
+        let table = assetTable.waitForExistence(timeout: 30) ? assetTable : app.outlines["assetTable"]
+        XCTAssertTrue(table.waitForExistence(timeout: 10), "assetTable not found")
+        let texCell = table.staticTexts["Texture2D"].firstMatch
+        XCTAssertTrue(texCell.waitForExistence(timeout: 30), "Texture2D row never appeared")
+        texCell.click()
+
+        // Success signal: the decoded texture renders as an image.
+        XCTAssertTrue(app.images["previewImage"].waitForExistence(timeout: 30),
+                      "texture preview image did not appear — native decode likely failed")
+        XCTAssertFalse(app.staticTexts["Preview Failed"].exists, "preview reported failure")
+        XCTAssertFalse(app.staticTexts["No visual preview for this type yet"].exists,
+                       "texture fell back to no-preview — decode failed")
+    }
 }
