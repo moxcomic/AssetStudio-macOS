@@ -58,4 +58,41 @@ public class LoadListTests
             c.Request("workspace/load", new { paths = new[] { "/nonexistent/nope.ab" } }));
         Assert.Contains("INVALID_PATHS", ex.Message);
     }
+
+    [Fact]
+    public void LoadErrorUsesStructuredCodeEnvelope()
+    {
+        using var c = new StdioClient();
+        c.Request("initialize", null);
+        var msg = c.RequestFull("workspace/load", new { paths = new[] { "/nonexistent/nope.ab" } });
+        var err = (JObject)msg["error"]!;
+        Assert.Equal(-32000, err["code"]!.Value<int>());
+        Assert.Equal("INVALID_PATHS", err["data"]!["code"]!.Value<string>());
+    }
+
+    [Fact]
+    public void ResetClearsWorkspace()
+    {
+        using var c = new StdioClient();
+        c.Request("initialize", null);
+        c.Request("workspace/load",
+            new { paths = new[] { Path.Combine(StdioClient.FixturesDir, "char_118_yuki.ab") } });
+        c.Request("workspace/reset", null);
+        var list = c.Request("assets/list", new { offset = 0, limit = 5000 });
+        Assert.Equal(0, list["total"]!.Value<int>());
+        Assert.Empty((JArray)list["rows"]!);
+    }
+
+    [Fact]
+    public void SecondLoadReplacesNotAccumulates()
+    {
+        using var c = new StdioClient();
+        c.Request("initialize", null);
+        var path = Path.Combine(StdioClient.FixturesDir, "char_118_yuki.ab");
+        c.Request("workspace/load", new { paths = new[] { path } });
+        var load2 = c.Request("workspace/load", new { paths = new[] { path } });
+        Assert.Equal(35, load2["assetCount"]!.Value<int>());
+        var list = c.Request("assets/list", new { offset = 0, limit = 5000 });
+        Assert.Equal(35, list["total"]!.Value<int>());
+    }
 }

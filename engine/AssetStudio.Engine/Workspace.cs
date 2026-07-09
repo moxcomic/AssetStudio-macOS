@@ -5,6 +5,8 @@ using Object = AssetStudio.Object;
 
 namespace AssetStudio.Engine;
 
+// NOT internally synchronized. EngineServer's single SemaphoreSlim gate serializes ALL access
+// (load/reset/list/get); do not call these members concurrently from anywhere else.
 public class Workspace
 {
     private static readonly HashSet<ClassIDType> ExportableTypes = new()
@@ -19,7 +21,10 @@ public class Workspace
     public readonly List<EngineAssetItem> Assets = new();
     private AssetRowDto[]? _rowCache;
 
-    public event Action<string, int, int>? Progress; // token, current, total
+    // token, current, total. Fires only during ParseAssets (the cheap post-read pass).
+    // TODO(Task 12): forward vendored AssetStudio.Progress for load-phase ticks so clients see
+    // progress during the expensive LoadFilesAndFolders read, not just a fast 0->100 burst after.
+    public event Action<string, int, int>? Progress;
 
     public LoadResult Load(string[] paths, string? unityVersion, bool loadAll)
     {

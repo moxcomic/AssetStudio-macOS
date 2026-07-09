@@ -9,7 +9,10 @@ namespace AssetStudio.Engine;
 public class EngineServer
 {
     private readonly Workspace _workspace = new();
-    private readonly SemaphoreSlim _gate = new(1, 1); // engine ops are single-flight
+    // Single choke point: EVERY workspace operation (load/reset/list/future get/preview/export)
+    // acquires this gate, so the non-thread-safe Workspace is never touched concurrently even
+    // though StreamJsonRpc dispatches requests concurrently and Load runs on a Task.Run thread.
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private JsonRpc? _rpc;
 
     public Workspace Workspace => _workspace;
@@ -23,12 +26,22 @@ public class EngineServer
 
     private void Notify(string method, object arg)
     {
-        try { _ = _rpc?.NotifyWithParameterObjectAsync(method, arg); } catch { /* channel closing */ }
+        try
+        {
+            var t = _rpc?.NotifyWithParameterObjectAsync(method, arg);
+            // Observe async faults (channel closing mid-send) so they don't surface as UnobservedTaskException.
+            t?.ContinueWith(static tt => { _ = tt.Exception; },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        catch { /* channel closing */ }
     }
 
     [JsonRpcMethod("initialize")]
     public InitializeResult Initialize()
     {
+        // Stateless w.r.t. the workspace, so intentionally ungated.
         // Engine version from the assembly (authoritative <Version>), formatted to 3 parts => "0.1.0".
         var engine = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
         var core = typeof(AssetsManager).Assembly.GetName().Version?.ToString() ?? "unknown";
@@ -61,6 +74,7 @@ public class EngineServer
         await _gate.WaitAsync();
         try { return await Task.Run(() => _workspace.Load(paths, unityVersion, loadAll)); }
         catch (EngineException e) { throw Wrap(e); }
+        catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.LoadFailed, e.Message)); }
         finally { _gate.Release(); }
     }
 
@@ -69,11 +83,20 @@ public class EngineServer
     {
         await _gate.WaitAsync();
         try { _workspace.Reset(); }
+        catch (EngineException e) { throw Wrap(e); }
+        catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.IoError, e.Message)); }
         finally { _gate.Release(); }
     }
 
     [JsonRpcMethod("assets/list")]
-    public ListResult List(int offset, int limit) => _workspace.List(offset, limit);
+    public async Task<ListResult> ListAsync(int offset, int limit)
+    {
+        await _gate.WaitAsync();
+        try { return _workspace.List(offset, limit); }
+        catch (EngineException e) { throw Wrap(e); }
+        catch (Exception e) { throw Wrap(new EngineException(ErrorCodes.IoError, e.Message)); }
+        finally { _gate.Release(); }
+    }
 
     internal static LocalRpcException Wrap(EngineException e) =>
         new(e.Message) { ErrorCode = -32000, ErrorData = new { code = e.Code } };
