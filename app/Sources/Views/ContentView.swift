@@ -2,9 +2,11 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(EngineController.self) private var controller
+    @Environment(ExportCoordinator.self) private var exporter
 
     var body: some View {
         @Bindable var controller = controller
+        @Bindable var exporter = exporter
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220)
@@ -33,11 +35,17 @@ struct ContentView: View {
                     description: Text(why))
             }
         }
+        .overlay { ExportProgressOverlay() }
         .alert("AssetStudio", isPresented: .init(
             get: { controller.errorToast != nil },
             set: { if !$0 { controller.errorToast = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(controller.errorToast ?? "") }
+        .sheet(isPresented: $exporter.showReport) {
+            if case .finished(let summary) = exporter.phase {
+                ExportReportSheet(summary: summary)
+            }
+        }
         .navigationTitle("AssetStudio")
     }
 }

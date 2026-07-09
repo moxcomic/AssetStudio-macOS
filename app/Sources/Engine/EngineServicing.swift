@@ -11,6 +11,7 @@ protocol EngineServicing: Sendable {
     func reset() async throws
     func preview(id: Int) async throws -> PreviewResult
     func export(_ params: ExportParams) async throws -> ExportResult
+    func startExport(_ params: ExportParams) async throws -> EngineClient.InFlightExport
     func cancel(requestID: Int) async
     func shutdown() async
     var notifications: AsyncStream<EngineNotification> { get }

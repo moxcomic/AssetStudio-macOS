@@ -25,10 +25,21 @@ actor FakeEngine: EngineServicing {
     private(set) var previewEntered = false
     private var previewGateWaiter: CheckedContinuation<Void, Never>?
 
+    // Export scripting + gate (export coordinator tests).
+    private let exportResult: ExportResult
+    private let exportError: EngineError?
+    private let gateExport: Bool
+    private(set) var exportStarted = false
+    private(set) var cancelledRequestID: Int? = nil
+    private var exportGateWaiter: CheckedContinuation<Void, Never>?
+
     init(loadResult: LoadResult, pages: [ListResult], gateLoad: Bool = false,
          previewResult: PreviewResult = PreviewResult(kind: "none", path: nil, text: nil,
              meta: PreviewMeta(name: "", type: "", container: "", pathId: 0, size: 0, extra: [:])),
-         gatePreview: Bool = false) {
+         gatePreview: Bool = false,
+         exportResult: ExportResult = ExportResult(exported: 0, skipped: 0, errors: []),
+         exportError: EngineError? = nil,
+         gateExport: Bool = false) {
         (notifications, notifyCont) = AsyncStream.makeStream(of: EngineNotification.self)
         (processExited, exitCont) = AsyncStream.makeStream(of: Int32.self)
         self.loadResult = loadResult
@@ -36,6 +47,9 @@ actor FakeEngine: EngineServicing {
         self.gateLoad = gateLoad
         self.previewResult = previewResult
         self.gatePreview = gatePreview
+        self.exportResult = exportResult
+        self.exportError = exportError
+        self.gateExport = gateExport
     }
 
     func initialize() async throws -> InitializeResult {
@@ -74,8 +88,28 @@ actor FakeEngine: EngineServicing {
     func export(_ params: ExportParams) async throws -> ExportResult {
         ExportResult(exported: 0, skipped: 0, errors: [])
     }
-    func cancel(requestID: Int) async {}
+    func cancel(requestID: Int) async { cancelledRequestID = requestID }
     func shutdown() async { shutdownCalled = true }
+
+    func startExport(_ params: ExportParams) async throws -> EngineClient.InFlightExport {
+        exportStarted = true
+        let result = exportResult
+        let error = exportError
+        let gate = gateExport
+        return EngineClient.InFlightExport(requestID: 777, result: Task { [weak self] in
+            if gate { await self?.awaitExportGate() }
+            if let error { throw error }
+            return result
+        })
+    }
+
+    private func awaitExportGate() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in exportGateWaiter = cont }
+    }
+    func openExportGate() {
+        exportGateWaiter?.resume()
+        exportGateWaiter = nil
+    }
 
     func emitExit(_ code: Int32) { exitCont.yield(code) }
 }
@@ -213,5 +247,69 @@ final class EngineControllerServiceTests: XCTestCase {
         await fake.openPreviewGate()                         // let the preview task resume
         for _ in 0..<20 { try? await Task.sleep(nanoseconds: 5_000_000) }   // let it run to completion
         XCTAssertEqual(controller.preview, .empty, "superseded preview must not overwrite the reset state")
+    }
+
+    // MARK: Export coordinator
+
+    private func settle(_ cond: () async -> Bool) async {
+        for _ in 0..<400 {
+            if await cond() { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    func testExportCoordinatorFinishesWithSummary() async {
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 3, unityVersion: "x"),
+                              pages: [ListResult(total: 0, rows: [])],
+                              exportResult: ExportResult(exported: 5, skipped: 1, errors: []))
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        let exporter = ExportCoordinator()
+        exporter.start(ids: [1, 2, 3], mode: "convert", controller: controller,
+                       destination: URL(fileURLWithPath: "/tmp/export-test"))
+        await settle { if case .finished = exporter.phase { return true }; return false }
+        guard case .finished(let summary) = exporter.phase else {
+            return XCTFail("expected .finished, got \(exporter.phase)")
+        }
+        XCTAssertEqual(summary.exported, 5)
+        XCTAssertEqual(summary.skipped, 1)
+        XCTAssertTrue(summary.errors.isEmpty)
+        XCTAssertTrue(exporter.showReport)
+    }
+
+    func testExportCoordinatorSurfacesEngineError() async {
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 1, unityVersion: "x"),
+                              pages: [ListResult(total: 0, rows: [])],
+                              exportError: EngineError(code: "CANCELLED", message: "export cancelled"))
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        let exporter = ExportCoordinator()
+        exporter.start(ids: [1], mode: "convert", controller: controller,
+                       destination: URL(fileURLWithPath: "/tmp/export-test"))
+        await settle { if case .finished = exporter.phase { return true }; return false }
+        guard case .finished(let summary) = exporter.phase else {
+            return XCTFail("expected .finished, got \(exporter.phase)")
+        }
+        XCTAssertEqual(summary.exported, 0)
+        XCTAssertEqual(summary.errors.count, 1)
+        XCTAssertTrue(summary.errors[0].message.contains("CANCELLED"))
+    }
+
+    func testExportCoordinatorCancelSendsRequestID() async {
+        let fake = FakeEngine(loadResult: LoadResult(loadedFiles: 1, assetCount: 3, unityVersion: "x"),
+                              pages: [ListResult(total: 0, rows: [])],
+                              gateExport: true)
+        let controller = EngineController(injectedClient: fake)
+        await controller.startEngineIfNeeded()
+        let exporter = ExportCoordinator()
+        exporter.start(ids: [1, 2, 3], mode: "convert", controller: controller,
+                       destination: URL(fileURLWithPath: "/tmp/export-test"))
+        await settle { await fake.exportStarted }
+        for _ in 0..<10 { try? await Task.sleep(nanoseconds: 5_000_000) }   // let the coordinator record inFlight
+        exporter.cancel()
+        await settle { await fake.cancelledRequestID != nil }
+        await fake.openExportGate()   // let the export finish so nothing dangles
+        let cancelled = await fake.cancelledRequestID
+        XCTAssertEqual(cancelled, 777)
     }
 }

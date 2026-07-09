@@ -197,18 +197,25 @@ actor EngineClient: EngineServicing {
         try writeFrame(body)
     }
 
+    /// Registers the continuation and THEN emits — no `await` in between, so a
+    /// response can never arrive before the continuation is registered (race-free).
+    private func registerAndEmit<P: Encodable>(id: Int, method: String, params: P,
+                                               cont: CheckedContinuation<Data, Error>) {
+        pending[id] = cont
+        do { try emit(id: id, method: method, params: params) }
+        catch {
+            pending.removeValue(forKey: id)
+            cont.resume(throwing: error)
+        }
+    }
+
     private func request<P: Encodable, R: Decodable>(_ method: String, _ params: P, as _: R.Type) async throws -> R {
         guard case .running = state else {
             throw EngineError(code: "ENGINE_NOT_RUNNING", message: "engine process is not running")
         }
         let id = allocateID()
         let data: Data = try await withCheckedThrowingContinuation { cont in
-            pending[id] = cont                 // register FIRST (no await between this and emit)
-            do { try emit(id: id, method: method, params: params) }
-            catch {
-                pending.removeValue(forKey: id)
-                cont.resume(throwing: error)
-            }
+            registerAndEmit(id: id, method: method, params: params, cont: cont)
         }
         return try JSONDecoder().decode(R.self, from: data)
     }
@@ -245,6 +252,30 @@ actor EngineClient: EngineServicing {
     }
     func export(_ params: ExportParams) async throws -> ExportResult {
         try await request("assets/export", params, as: ExportResult.self)
+    }
+
+    /// A running export: its JSON-RPC request id (for cancellation) and a Task
+    /// producing the final result. The id is allocated on the actor before the
+    /// Task's work runs, so `cancel(requestID:)` can target it immediately.
+    struct InFlightExport: Sendable {
+        let requestID: Int
+        let result: Task<ExportResult, Error>
+    }
+
+    /// Starts an export and returns immediately with its request id + a result
+    /// Task, so the caller can cancel a long batch mid-flight.
+    func startExport(_ params: ExportParams) throws -> InFlightExport {
+        guard case .running = state else {
+            throw EngineError(code: "ENGINE_NOT_RUNNING", message: "engine process is not running")
+        }
+        let id = allocateID()
+        let result = Task<ExportResult, Error> {
+            let data: Data = try await withCheckedThrowingContinuation { cont in
+                self.registerAndEmit(id: id, method: "assets/export", params: params, cont: cont)
+            }
+            return try JSONDecoder().decode(ExportResult.self, from: data)
+        }
+        return InFlightExport(requestID: id, result: result)
     }
 
     func shutdown() {

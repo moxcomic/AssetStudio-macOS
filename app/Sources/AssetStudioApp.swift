@@ -5,12 +5,18 @@ import AppKit
 struct AssetStudioApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var controller = EngineController()
+    @State private var exporter = ExportCoordinator()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(controller)
-                .task { await controller.startEngineIfNeeded() }
+                .environment(exporter)
+                .task {
+                    controller.onExportProgress = { [weak exporter] note in exporter?.updateProgress(note) }
+                    exporter.currentController = controller
+                    await controller.startEngineIfNeeded()
+                }
                 .onAppear { appDelegate.controller = controller }
         }
         .commands {
@@ -23,7 +29,29 @@ struct AssetStudioApp: App {
                 Button("Reset Workspace") { Task { await controller.resetWorkspace() } }
                     .keyboardShortcut("w", modifiers: [.command, .option])
             }
+            CommandMenu("Export") {
+                Button("Export Selected…") { exportSelected("convert") }
+                    .keyboardShortcut("e")
+                Button("Export Filtered…") {
+                    exporter.begin(ids: controller.visibleRows.map(\.id), mode: "convert", controller: controller)
+                }
+                Button("Export All…") {
+                    exporter.begin(ids: controller.rows.map(\.id), mode: "convert", controller: controller)
+                }
+                Divider()
+                Button("Export Raw Selected…") { exportSelected("raw") }
+                Button("Dump Selected…") { exportSelected("dump") }
+            }
         }
+
+        Settings {
+            SettingsView()
+        }
+    }
+
+    private func exportSelected(_ mode: String) {
+        let ids = controller.selection.map { [$0] } ?? []
+        exporter.begin(ids: ids, mode: mode, controller: controller)
     }
 }
 
