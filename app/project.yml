@@ -21,6 +21,18 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_APP_SANDBOX: NO
         SWIFT_STRICT_CONCURRENCY: complete
+    postBuildScripts:
+      - name: Embed AssetStudio Engine
+        script: |
+          ENGINE_SRC="$SRCROOT/../engine/publish"
+          DEST="$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/engine"
+          if [ -d "$ENGINE_SRC" ]; then
+            rm -rf "$DEST"; mkdir -p "$DEST"
+            cp -R "$ENGINE_SRC/" "$DEST/"
+          else
+            echo "warning: $ENGINE_SRC missing — run scripts/build-engine.sh (app will show Engine Not Found)"
+          fi
+        basedOnDependencyAnalysis: false
   AssetStudioTests:
     type: bundle.unit-test
     platform: macOS
